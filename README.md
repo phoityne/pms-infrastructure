@@ -1,6 +1,6 @@
 # pms-infrastructure
 
-`pms-infrastructure` is one of the internal packages that make up the `pty-mcp-server` project.  
+`pms-infrastructure` is one of the internal packages that make up the [`pty-mcp-server`](https://github.com/phoityne/pty-mcp-server) project.  
 It provides concrete implementations for accessing external systems, such as file storage, environment variables, and time, and acts as the boundary between the core application logic and the outside world.
 
 In this context, "outside world" refers specifically to the Linux environment in which the server runs.  
@@ -12,9 +12,10 @@ This architecture allows the MCP server to act as a mediator between structured 
 ---
 
 ## Package Structure
-
+![Package Structure](./docs/21-1.png)
 ---
 
 ## Module Structure
+![Module Structure](./docs/21-2.png)
 
 ---
