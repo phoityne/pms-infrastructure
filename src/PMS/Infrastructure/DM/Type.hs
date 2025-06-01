@@ -94,6 +94,23 @@ instance Default PtyConnectToolParams where
 
 -- |
 --
+data PtySetCwdToolParams =
+  PtySetCwdToolParams {
+    _projectDirPtySetCwdToolParams  :: String
+  , _argumentsPtySetCwdToolParams   :: Maybe [String]
+  } deriving (Show, Read, Eq)
+
+$(deriveJSON defaultOptions {fieldLabelModifier = DM.dropDataName "PtySetCwdToolParams", omitNothingFields = True} ''PtySetCwdToolParams)
+makeLenses ''PtySetCwdToolParams
+
+instance Default PtySetCwdToolParams where
+  def = PtySetCwdToolParams {
+        _projectDirPtySetCwdToolParams  = def
+      , _argumentsPtySetCwdToolParams   = def
+      }
+
+-- |
+--
 data PtyGhciToolParams =
   PtyGhciToolParams {
     _projectDirPtyGhciToolParams  :: String

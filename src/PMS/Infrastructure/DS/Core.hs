@@ -153,9 +153,9 @@ genPtyConnectTask dat = do
 
   (cmd, argsArray)  <- getCommandArgs name argsBS
   
-  $logDebugS DM._LOGTAG $ T.pack $ "pmsConnectTask: pmsConnect cmd. " ++ cmd ++ " " ++ show argsArray
+  $logDebugS DM._LOGTAG $ T.pack $ "ptyConnectTask: cmd. " ++ cmd ++ " " ++ show argsArray
 
-  return $ pmsConnectTask pmsTMVar procTMVar lockTMVar cmd argsArray prompts callback
+  return $ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd argsArray prompts callback
 
   where
     -- |
@@ -163,9 +163,9 @@ genPtyConnectTask dat = do
     getCommandArgs :: String -> BL.ByteString -> AppContext (String, [String])
     getCommandArgs "pty-connect" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
-      let args = maybe [] id (argsDat^.argumentsPtyConnectToolParams)
+      let argsArray = maybe [] id (argsDat^.argumentsPtyConnectToolParams)
           cmd = argsDat^.commandPtyConnectToolParams
-      return (cmd, args)
+      return (cmd, argsArray)
 
     getCommandArgs "pty-bash" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
@@ -177,11 +177,31 @@ genPtyConnectTask dat = do
       let argsArray = argsDat^.argumentsStringArrayToolParams
       return ("ssh", argsArray)
 
+    getCommandArgs "pty-cabal" argsBS = do
+      argsDat <- liftEither $ eitherDecode $ argsBS
+      let prjDir = argsDat^.projectDirPtySetCwdToolParams
+          argsArray = maybe [] id (argsDat^.argumentsPtySetCwdToolParams)
+
+      liftIOE $ D.setCurrentDirectory prjDir
+      
+      return ("cabal", "repl":argsArray)
+
+    getCommandArgs "pty-stack" argsBS = do
+      argsDat <- liftEither $ eitherDecode $ argsBS
+      let prjDir = argsDat^.projectDirPtySetCwdToolParams
+          argsArray = maybe [] id (argsDat^.argumentsPtySetCwdToolParams)
+
+      liftIOE $ D.setCurrentDirectory prjDir
+      
+      return ("stack", "repl": argsArray)
+
     getCommandArgs "pty-ghci" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
       let prjDir = argsDat^.projectDirPtyGhciToolParams
           startup = argsDat^.startupFilePtyGhciToolParams
           addArgs = maybe [] id (argsDat^.argumentsPtyGhciToolParams)
+
+      liftIOE $ D.setCurrentDirectory prjDir
       argsArray <- liftIOE $ getGhciFlagsFromPath prjDir startup
       
       return ("ghc", argsArray ++ addArgs)
@@ -190,7 +210,7 @@ genPtyConnectTask dat = do
 
 -- |
 --
-pmsConnectTask :: STM.TMVar (Maybe Pty)
+ptyConnectTask :: STM.TMVar (Maybe Pty)
                -> STM.TMVar (Maybe ProcessHandle)
                -> STM.TMVar ()
                -> String
@@ -198,8 +218,8 @@ pmsConnectTask :: STM.TMVar (Maybe Pty)
                -> [String]
                -> DM.PtyConnectCommandCallback ()
                -> IOTask ()
-pmsConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.catchAny errHdl $ do
-  hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.pmsConnectTask run. " ++ cmd ++ " " ++ show args
+ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.catchAny errHdl $ do
+  hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyConnectTask run. " ++ cmd ++ " " ++ show args
 
   let env = Nothing
       dim = (80, 24)
@@ -208,13 +228,13 @@ pmsConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.c
 
   STM.atomically (STM.takeTMVar pmsTMVar) >>= \case
     Just _ -> do
-      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.pmsConnectTask: pms is already connected."
+      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyConnectTask: pms is already connected."
       callback (ExitFailure 1) "" "PTY is already connected."
     Nothing -> STM.atomically $ STM.putTMVar pmsTMVar (Just pms)
 
   STM.atomically (STM.takeTMVar procTMVar) >>= \case
     Just _ -> do
-      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.pmsConnectTask: process is already connected."
+      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyConnectTask: process is already connected."
       callback (ExitFailure 1) "" "Process is already connected."
     Nothing -> STM.atomically $ STM.putTMVar procTMVar (Just procHdl)
 
@@ -222,7 +242,7 @@ pmsConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.c
 
   callback ExitSuccess (maybe "Nothing" id res) ""
 
-  hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.pmsConnectTask end."
+  hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.ptyConnectTask end."
 
   where
     -- |
@@ -245,31 +265,31 @@ genPtyMessageTask dat = do
   argsDat <- liftEither $ eitherDecode $ argsBS
   let args = argsDat^.argumentsStringToolParams
 
-  $logDebugS DM._LOGTAG $ T.pack $ "pmsMessageTask: pmsMessage args. " ++ args
-  return $ pmsMessageTask pmsTMVar procTMVar lockTMVar args prompts callback
+  $logDebugS DM._LOGTAG $ T.pack $ "ptyMessageTask: args. " ++ args
+  return $ ptyMessageTask pmsTMVar procTMVar lockTMVar args prompts callback
 
 -- |
 --
-pmsMessageTask :: STM.TMVar (Maybe Pty)
+ptyMessageTask :: STM.TMVar (Maybe Pty)
                -> STM.TMVar (Maybe ProcessHandle)
                -> STM.TMVar ()
                -> String  -- arguments line
                -> [String]  -- promt list
                -> DM.PtyMessageCommandCallback ()
                -> IOTask ()
-pmsMessageTask pmsTMVar _ lockTMVar args prompts callback = flip E.catchAny errHdl $ do
-  hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.pmsMessageTask run. " ++ args
+ptyMessageTask pmsTMVar _ lockTMVar args prompts callback = flip E.catchAny errHdl $ do
+  hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask run. " ++ args
 
   STM.atomically (STM.readTMVar pmsTMVar) >>= \case
     Nothing -> do
-      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.pmsMessageTask: pms is not connected."
+      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyMessageTask: pms is not connected."
       callback (ExitFailure 1) "" "PTY is not connected."
     Just pms -> do
       writePty pms $ TE.encodeUtf8 $ T.pack $ args ++ _LF
       res <- expect lockTMVar pms prompts
       callback ExitSuccess (maybe "Nothing" id res) ""
 
-  hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.pmsMessageTask end."
+  hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask end."
 
   where
     -- |
@@ -323,8 +343,6 @@ getGhciFlagsFromPath prjDir startup = do
 
   hPutStrLn stderr $ "[INFO] getGhciFlagsFromPath: cwd: " ++ cwd
   hPutStrLn stderr $ "[INFO] getGhciFlagsFromPath: startupFile: " ++ startupFile
-
-  D.setCurrentDirectory cwd
 
   explicitCradle <- HIE.findCradle startupFile
   cradle <- maybe (HIE.loadImplicitCradle mempty startupFile)
