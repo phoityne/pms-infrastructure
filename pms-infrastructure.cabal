@@ -1,4 +1,4 @@
-cabal-version:      3.14
+cabal-version:      3.12
 -- The cabal-version field refers to the version of the .cabal specification,
 -- and can be different from the cabal-install (the tool) version and the
 -- Cabal (the library) version you are using. As such, the Cabal (the library)
@@ -44,19 +44,20 @@ maintainer:         phoityne.hs@gmail.com
 copyright:          2025-2026 phoityne.hs@gmail.com
 category:           AI
 build-type:         Simple
+homepage:           https://github.com/phoityne/pms-infrastructure
+bug-reports:        https://github.com/phoityne/pms-infrastructure/issues
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
-extra-doc-files:    CHANGELOG.md
+extra-doc-files:    README.md,
+                    CHANGELOG.md
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
 
-common warnings
-    ghc-options: -Wall
 
 library
     -- Import common warning flags.
-    import:           warnings
+    ghc-options: -Wall
 
     -- Modules exported by the library.
     exposed-modules:  PMS.Infrastructure.DM.Type,
@@ -97,14 +98,15 @@ library
     hs-source-dirs:   src
 
     -- Base language which the package is written in.
-    default-language: GHC2024
+    default-language: GHC2021
+    default-extensions:  LambdaCase
 
 test-suite pms-infrastructure-test
     -- Import common warning flags.
-    import:           warnings
+    ghc-options: -Wall
 
     -- Base language which the package is written in.
-    default-language: GHC2024
+    default-language: GHC2021
 
     -- Modules included in this executable, other than Main.
     other-modules:    PMS.Infrastructure.App.ControlSpec

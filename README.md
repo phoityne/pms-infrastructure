@@ -12,10 +12,10 @@ This architecture allows the MCP server to act as a mediator between structured 
 ---
 
 ## Package Structure
-![Package Structure](./docs/21-1.png)
+![Package Structure](https://raw.githubusercontent.com/phoityne/pms-infrastructure/main/docs/21-1.png)
 ---
 
 ## Module Structure
-![Module Structure](./docs/21-2.png)
+![Module Structure](https://raw.githubusercontent.com/phoityne/pms-infrastructure/main/docs/21-2.png)
 
 ---

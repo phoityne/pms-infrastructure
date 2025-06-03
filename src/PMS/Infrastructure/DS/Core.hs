@@ -80,6 +80,7 @@ cmd2task = await >>= \case
     go (DM.PtyConnectCommand dat) = genPtyConnectTask dat
     go (DM.PtyMessageCommand dat) = genPtyMessageTask dat
     go (DM.SystemCommand dat) = genSystemTask dat
+    go (DM.EchoCommand dat) = genEchoTask dat
 
 ---------------------------------------------------------------------------------
 -- |
@@ -106,6 +107,27 @@ sink = await >>= \case
       return ()
 
 ---------------------------------------------------------------------------------
+-- |
+--
+genEchoTask :: DM.EchoCommandData -> AppContext (IOTask ())
+genEchoTask dat = do
+  let value = dat^.DM.valueEchoCommandData
+      callback = dat^.DM.callbackEchoCommandData
+
+  $logDebugS DM._LOGTAG $ T.pack $ "echoTask: " ++ value
+  return $ echoTask value callback
+
+  where
+    -- |
+    --
+    echoTask :: String -> DM.EchoCommandCallback () -> IOTask ()
+    echoTask value callback = do
+      hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.echoTask run. " ++ value
+
+      callback value
+
+      hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.echoTask end."
+
 -- |
 --
 genSystemTask :: DM.SystemCommandData -> AppContext (IOTask ())

@@ -7,6 +7,7 @@ import Test.Hspec
 import Control.Concurrent.Async
 import qualified Control.Concurrent.STM as STM
 import Control.Lens
+import Data.Default
 
 import qualified PMS.Domain.Model.DM.Type as DM
 import qualified PMS.Infrastructure.App.Control as SUT
@@ -76,30 +77,34 @@ tearDown _ = do
 --
 run :: SpecWith SpecContext
 run = do
-  describe "runApp" $ do
-    context "when AppData default" $ do
-      it "should be run" $ \ctx -> do 
+  describe "runWithAppData" $ do
+    context "when echo command issued." $ do
+      it "should call callback" $ \ctx -> do 
         putStrLn "[INFO] EXECUTING THE FIRST TEST."
 
         let domDat = ctx^.domainDataSpecContext
             appDat = ctx^.appDataSpecContext
             cmdQ   = domDat^.DM.commandQueueDomainData
             resQ   = domDat^.DM.responseQueueDomainData
-            argDat = DM.InitializeCommandData 5 (callback resQ)
-            args   = DM.InitializeCommand argDat
-            expect = 5
+            expect = "abc"
+            argDat = DM.EchoCommandData expect (callback resQ)
+            args   = DM.EchoCommand argDat
             
         thId <- async $ SUT.runWithAppData appDat domDat
 
         STM.atomically $ STM.writeTQueue cmdQ args
 
-        actual <- STM.atomically $ STM.readTQueue resQ
+        (DM.McpToolsCallResponse dat) <- STM.atomically $ STM.readTQueue resQ
+
+        let actual = dat^.DM.jsonrpcMcpToolsCallResponseData^.DM.jsonrpcJsonRpcRequest
         actual `shouldBe` expect
 
         cancel thId
 
 -- |
 --
-callback :: STM.TQueue Int -> Int -> IO ()
-callback queue x = do
-  STM.atomically $ STM.writeTQueue queue x
+callback :: STM.TQueue DM.McpResponse -> DM.EchoCommandCallback ()
+callback queue value = do
+  STM.atomically $ STM.writeTQueue queue 
+                 $ DM.McpToolsCallResponse
+                   def {DM._jsonrpcMcpToolsCallResponseData = def {DM._jsonrpcJsonRpcRequest= value}}
