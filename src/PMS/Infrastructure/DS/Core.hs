@@ -319,19 +319,32 @@ ptyMessageTask pmsTMVar _ lockTMVar args prompts callback = flip E.catchAny errH
     errHdl :: E.SomeException -> IO ()
     errHdl e = callback (ExitFailure 1) "" (show e)
 
-
 -- |
 --
 expect :: STM.TMVar () -> Pty -> [String] -> IO (Maybe String)
-expect lock pms prompts = do
-  m <- STM.atomically $ STM.tryTakeTMVar lock
-  case m of
-    Nothing -> return Nothing
-    Just () -> do
-      hPutStrLn stderr $ "[INFO] expect: " ++ show prompts
-      output <- readUntilPrompt pms prompts
-      STM.atomically $ STM.putTMVar lock ()
-      return $ Just $ T.unpack $ TE.decodeUtf8 output
+expect lock pty prompts = STM.atomically (STM.tryTakeTMVar lock) >>= \case
+  Nothing -> do
+    hPutStrLn stderr "[INFO] expect running. skip."
+    return Nothing
+  Just () -> flip E.catchAny exception $ flip E.finally finalize $ do
+    hPutStrLn stderr $ "[INFO] expect: " ++ show prompts
+    output <- readUntilPrompt pty prompts
+    let result = T.unpack (TE.decodeUtf8 output)
+    return (Just result)
+
+  where
+    -- |
+    --
+    exception :: E.SomeException -> IO (Maybe String)
+    exception e = do
+      hPutStrLn stderr $ "[ERROR] expect exception: " ++ show e
+      return . Just . show $ e
+
+    -- |
+    --
+    finalize :: IO ()
+    finalize = STM.atomically $ STM.putTMVar lock ()
+
 
 -- |
 --
