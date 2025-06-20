@@ -1,5 +1,9 @@
 # Revision history for pms-infrastructure
 
+## 0.0.3.0 -- 2025-06-15
+
+* Added support for handling cursor position control sequences.
+
 ## 0.0.2.0 -- 2025-06-15
 
 * Added finally to expect to ensure the lock is released.

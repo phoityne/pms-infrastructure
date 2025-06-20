@@ -20,7 +20,7 @@ name:               pms-infrastructure
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version:            0.0.2.0
+version:            0.0.3.0
 
 -- A short (one-line) description of the package.
 synopsis:           pms-infrastructure
@@ -57,7 +57,7 @@ extra-doc-files:    README.md,
 
 library
     -- Import common warning flags.
-    ghc-options: -Wall
+    ghc-options: -Wall -threaded
 
     -- Modules exported by the library.
     exposed-modules:  PMS.Infrastructure.DM.Type,
@@ -92,6 +92,7 @@ library
                       posix-pty,
                       directory,
                       hie-bios,
+                      strip-ansi-escape,
                       pms-domain-model
 
     -- Directories containing source files.
@@ -103,7 +104,7 @@ library
 
 test-suite pms-infrastructure-test
     -- Import common warning flags.
-    ghc-options: -Wall
+    ghc-options: -Wall -threaded
 
     -- Base language which the package is written in.
     default-language: GHC2021

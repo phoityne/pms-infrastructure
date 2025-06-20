@@ -11,6 +11,7 @@ import Control.Lens
 import Control.Monad.Reader
 import qualified Control.Concurrent.STM as STM
 import Data.Conduit
+import qualified Control.Concurrent as CC
 import Control.Concurrent.Async
 import qualified Data.Text as T
 import Control.Monad.Except
@@ -23,6 +24,9 @@ import System.Exit
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as BL
+import qualified Data.String.AnsiEscapeCodes.Strip.Text as ANSI
+import qualified Data.Text.Encoding.Error as TEE
+import Control.Monad
 
 import qualified HIE.Bios as HIE
 import qualified HIE.Bios.Types as HIE
@@ -77,10 +81,11 @@ cmd2task = await >>= \case
       cmd2task
 
     go :: DM.Command -> AppContext (IOTask ())
+    go (DM.EchoCommand dat) = genEchoTask dat
     go (DM.PtyConnectCommand dat) = genPtyConnectTask dat
+    go (DM.PtyTerminateCommand dat) = genPtyTerminateTask dat
     go (DM.PtyMessageCommand dat) = genPtyMessageTask dat
     go (DM.SystemCommand dat) = genSystemTask dat
-    go (DM.EchoCommand dat) = genEchoTask dat
 
 ---------------------------------------------------------------------------------
 -- |
@@ -134,14 +139,15 @@ genSystemTask :: DM.SystemCommandData -> AppContext (IOTask ())
 genSystemTask dat = do
   scriptsDir <- view DM.scriptsDirDomainData <$> lift ask
 
-  let name = dat^.DM.nameSystemCommandData
+  let nameTmp = dat^.DM.nameSystemCommandData
       callback = dat^.DM.callbackSystemCommandData
       argsBS = DM.unRawJsonByteString $ dat^.DM.argumentsSystemCommandData
-  
   args <- liftEither $ eitherDecode $ argsBS
+  
+  name <- validateCommand nameTmp
+  argsStr <- validateCommandArg $ args^.argumentsStringToolParams
 
-  -- ToDo: validation
-  let cmd = scriptsDir </> name ++ ".sh" ++ " " ++ (args^.argumentsStringToolParams)
+  let cmd = scriptsDir </> name ++ ".sh" ++ " " ++ argsStr
 
   $logDebugS DM._LOGTAG $ T.pack $ "systemTask: system cmd. " ++ cmd
   return $ systemTask cmd callback
@@ -167,17 +173,20 @@ genPtyConnectTask dat = do
   let name     = dat^.DM.namePtyConnectCommandData
       callback = dat^.DM.callbackPtyConnectCommandData
       argsBS   = DM.unRawJsonByteString $ dat^.DM.argumentsPtyConnectCommandData
+      tout     = 30 * 1000 * 1000
 
   prompts <- view DM.promptsDomainData <$> lift ask
   pmsTMVar  <- view pmsAppData <$> ask
   procTMVar <- view processHandleAppData <$> ask
   lockTMVar <- view lockAppData <$> ask
 
-  (cmd, argsArray)  <- getCommandArgs name argsBS
-  
+  (cmdTmp, argsArrayTmp)  <- getCommandArgs name argsBS
+  cmd <- validateCommand cmdTmp
+  argsArray <- validateCommandArgs argsArrayTmp
+
   $logDebugS DM._LOGTAG $ T.pack $ "ptyConnectTask: cmd. " ++ cmd ++ " " ++ show argsArray
 
-  return $ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd argsArray prompts callback
+  return $ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd argsArray prompts tout callback
 
   where
     -- |
@@ -238,12 +247,14 @@ ptyConnectTask :: STM.TMVar (Maybe Pty)
                -> String
                -> [String]
                -> [String]
+               -> Int
                -> DM.PtyConnectCommandCallback ()
                -> IOTask ()
-ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.catchAny errHdl $ do
+ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts tout callback = flip E.catchAny errHdl $ do
   hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyConnectTask run. " ++ cmd ++ " " ++ show args
 
   let env = Nothing
+      -- env = Just [("TERM", "dumb")]
       dim = (80, 24)
 
   (pms, procHdl) <- spawnWithPty env True cmd args dim
@@ -260,9 +271,9 @@ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.c
       callback (ExitFailure 1) "" "Process is already connected."
     Nothing -> STM.atomically $ STM.putTMVar procTMVar (Just procHdl)
 
-  res <- expect lockTMVar pms prompts
-
-  callback ExitSuccess (maybe "Nothing" id res) ""
+  race (expect lockTMVar pms prompts) (CC.threadDelay tout) >>= \case
+    Left res  -> callback ExitSuccess (maybe "Nothing" id res) ""
+    Right _ -> E.throwString "timeout occurred."
 
   hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.ptyConnectTask end."
 
@@ -275,11 +286,56 @@ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts callback = flip E.c
 
 -- |
 --
+genPtyTerminateTask :: DM.PtyTerminateCommandData -> AppContext (IOTask ())
+genPtyTerminateTask dat = do
+  let callback = dat^.DM.callbackPtyTerminateCommandData
+  
+  pmsTMVar  <- view pmsAppData <$> ask
+  procTMVar <- view processHandleAppData <$> ask
+
+  $logDebugS DM._LOGTAG $ T.pack $ "ptyTerminateTask called. "
+  return $ ptyTerminateTask pmsTMVar procTMVar callback
+
+-- |
+--
+ptyTerminateTask :: STM.TMVar (Maybe Pty)
+                 -> STM.TMVar (Maybe ProcessHandle)
+                 -> DM.PtyTerminateCommandCallback ()
+                 -> IOTask ()
+ptyTerminateTask pmsTMVar procTMVar callback = flip E.catchAny errHdl $ do
+  hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyTerminateTask run. "
+
+  STM.atomically (STM.swapTMVar pmsTMVar Nothing) >>= \case
+    Nothing -> do
+      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyTerminateTask: pty is not connected."
+      callback (ExitFailure 1) "" "PTY is not connected."
+    Just pms -> STM.atomically (STM.swapTMVar procTMVar Nothing) >>= \case
+      Nothing -> do
+        hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyTerminateTask: invalid pty status."
+        callback (ExitFailure 1) "" "invalid pty status."
+      Just phandle -> do
+        hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyTerminateTask closePty : "
+        closePty pms
+        exitCode <- waitForProcess phandle
+        callback exitCode "pty teminated." ""
+
+  hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.ptyTerminateTask end."
+
+  where
+    -- |
+    --
+    errHdl :: E.SomeException -> IO ()
+    errHdl e = callback (ExitFailure 1) "" (show e)
+
+
+
+-- |
+--
 genPtyMessageTask :: DM.PtyMessageCommandData -> AppContext (IOTask ())
 genPtyMessageTask dat = do
   let callback = dat^.DM.callbackPtyMessageCommandData
       argsBS = DM.unRawJsonByteString $ dat^.DM.argumentsPtyMessageCommandData
-  
+      tout = 30 * 1000 * 1000 
   prompts <- view DM.promptsDomainData <$> lift ask
   pmsTMVar  <- view pmsAppData <$> ask
   procTMVar <- view processHandleAppData <$> ask
@@ -288,7 +344,7 @@ genPtyMessageTask dat = do
   let args = argsDat^.argumentsStringToolParams
 
   $logDebugS DM._LOGTAG $ T.pack $ "ptyMessageTask: args. " ++ args
-  return $ ptyMessageTask pmsTMVar procTMVar lockTMVar args prompts callback
+  return $ ptyMessageTask pmsTMVar procTMVar lockTMVar args prompts tout callback
 
 -- |
 --
@@ -296,20 +352,18 @@ ptyMessageTask :: STM.TMVar (Maybe Pty)
                -> STM.TMVar (Maybe ProcessHandle)
                -> STM.TMVar ()
                -> String  -- arguments line
-               -> [String]  -- promt list
+               -> [String]  -- prompt list
+               -> Int       -- timeout microsec
                -> DM.PtyMessageCommandCallback ()
                -> IOTask ()
-ptyMessageTask pmsTMVar _ lockTMVar args prompts callback = flip E.catchAny errHdl $ do
+ptyMessageTask ptyTMVar _ lockTMVar args prompts tout callback = flip E.catchAny errHdl $ do
   hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask run. " ++ args
 
-  STM.atomically (STM.readTMVar pmsTMVar) >>= \case
+  STM.atomically (STM.readTMVar ptyTMVar) >>= \case
     Nothing -> do
-      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyMessageTask: pms is not connected."
+      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyMessageTask: pty is not connected."
       callback (ExitFailure 1) "" "PTY is not connected."
-    Just pms -> do
-      writePty pms $ TE.encodeUtf8 $ T.pack $ args ++ _LF
-      res <- expect lockTMVar pms prompts
-      callback ExitSuccess (maybe "Nothing" id res) ""
+    Just pty -> go pty
 
   hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask end."
 
@@ -318,6 +372,19 @@ ptyMessageTask pmsTMVar _ lockTMVar args prompts callback = flip E.catchAny errH
     --
     errHdl :: E.SomeException -> IO ()
     errHdl e = callback (ExitFailure 1) "" (show e)
+
+    go :: Pty -> IO ()
+    go pty = do
+      msg <- validateMessage args
+      let cmd = TE.encodeUtf8 $ T.pack $ msg ++ _LF
+      hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask writePty : " ++ BS.unpack cmd
+      writePty pty cmd
+      
+      race (expect lockTMVar pty prompts) (CC.threadDelay tout) >>= \case
+        Left res  -> callback ExitSuccess (maybe "Nothing" id res) ""
+        Right _ -> E.throwString "timeout occurred."
+
+
 
 -- |
 --
@@ -345,7 +412,6 @@ expect lock pty prompts = STM.atomically (STM.tryTakeTMVar lock) >>= \case
     finalize :: IO ()
     finalize = STM.atomically $ STM.putTMVar lock ()
 
-
 -- |
 --
 readUntilPrompt :: Pty -> [String] -> IO BS.ByteString
@@ -357,12 +423,41 @@ readUntilPrompt pms prompts = go BS.empty
 
     go acc = do
       chunk <- readPty pms
-      hPutStrLn stderr $ "[INFO] chunk:\n" ++ T.unpack (TE.decodeUtf8 chunk)
+      when ("\ESC[6n" `BS.isInfixOf` chunk) $ do
+        E.throwString "Unsupported: Detected cursor position report request (ESC[6n)."
+
+      let txt = ANSI.stripAnsiEscapeCodes $ TE.decodeUtf8With TEE.lenientDecode chunk
+      hPutStrLn stderr $ "[INFO] chunk:\n" ++ T.unpack txt
+
       let acc' = BS.append acc chunk
       if foundPrompt acc'
         then return acc'
         else go acc'
 
+{-
+readUntilPrompt :: Pty -> [String] -> IO BS.ByteString
+readUntilPrompt pms prompts = go BS.empty T.empty
+  where
+    promptTextList = map T.pack prompts
+
+    foundPrompt :: T.Text -> Bool
+    foundPrompt txt = any (`T.isInfixOf` txt) promptTextList
+
+    go accBs accTxt = do
+      chunk <- readPty pms
+      let txt = ANSI.stripAnsiEscapeCodes $ TE.decodeUtf8With TEE.lenientDecode chunk
+      hPutStrLn stderr $ "[INFO] chunk:\n" ++ T.unpack txt
+
+      when ("\ESC[6n" `BS.isInfixOf` chunk) $ do
+        hPutStrLn stderr "[INFO] Detected cursor position report request, replying with ESC[1;1R"
+        writePty pms (DBS.pack ([0x1B :: Word8, 0x5B :: Word8] ++ map (fromIntegral . ord) "0;0R"))
+
+      let accBs' = BS.append accBs chunk
+          accTxt' = T.append accTxt txt
+      if foundPrompt accTxt'
+        then return accBs'
+        else go accBs' accTxt'
+-}
 
 -- |
 -- 
