@@ -137,7 +137,7 @@ genEchoTask dat = do
 --
 genSystemTask :: DM.SystemCommandData -> AppContext (IOTask ())
 genSystemTask dat = do
-  scriptsDir <- view DM.scriptsDirDomainData <$> lift ask
+  toolsDir <- view DM.toolsDirDomainData <$> lift ask
 
   let nameTmp = dat^.DM.nameSystemCommandData
       callback = dat^.DM.callbackSystemCommandData
@@ -147,7 +147,7 @@ genSystemTask dat = do
   name <- validateCommand nameTmp
   argsStr <- validateCommandArg $ args^.argumentsStringToolParams
 
-  let cmd = scriptsDir </> name ++ ".sh" ++ " " ++ argsStr
+  let cmd = toolsDir </> name ++ ".sh" ++ " " ++ argsStr
 
   $logDebugS DM._LOGTAG $ T.pack $ "systemTask: system cmd. " ++ cmd
   return $ systemTask cmd callback

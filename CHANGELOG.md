@@ -1,8 +1,8 @@
 # Revision history for pms-infrastructure
 
-## 0.0.3.0 -- 2025-06-15
+## 0.0.3.0 -- 2025-06-22
 
-* Added support for handling cursor position control sequences.
+* Added file change monitoring for tools-list.json.
 
 ## 0.0.2.0 -- 2025-06-15
 
