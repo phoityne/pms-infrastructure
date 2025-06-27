@@ -24,16 +24,13 @@ import System.Exit
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as BL
-import qualified Data.String.AnsiEscapeCodes.Strip.Text as ANSI
-import qualified Data.Text.Encoding.Error as TEE
-import Control.Monad
 
 import qualified HIE.Bios as HIE
 import qualified HIE.Bios.Types as HIE
 import qualified HIE.Bios.Environment as HIE
 import qualified System.Directory as D
 
-
+import qualified PMS.Domain.Model.DS.Utility as DM
 import qualified PMS.Domain.Model.DM.Type as DM
 import qualified PMS.Domain.Model.DM.Constant as DM
 
@@ -85,7 +82,6 @@ cmd2task = await >>= \case
     go (DM.PtyConnectCommand dat) = genPtyConnectTask dat
     go (DM.PtyTerminateCommand dat) = genPtyTerminateTask dat
     go (DM.PtyMessageCommand dat) = genPtyMessageTask dat
-    go (DM.SystemCommand dat) = genSystemTask dat
 
 ---------------------------------------------------------------------------------
 -- |
@@ -135,39 +131,6 @@ genEchoTask dat = do
 
 -- |
 --
-genSystemTask :: DM.SystemCommandData -> AppContext (IOTask ())
-genSystemTask dat = do
-  toolsDir <- view DM.toolsDirDomainData <$> lift ask
-
-  let nameTmp = dat^.DM.nameSystemCommandData
-      callback = dat^.DM.callbackSystemCommandData
-      argsBS = DM.unRawJsonByteString $ dat^.DM.argumentsSystemCommandData
-  args <- liftEither $ eitherDecode $ argsBS
-  
-  name <- validateCommand nameTmp
-  argsStr <- validateCommandArg $ args^.argumentsStringToolParams
-
-  let cmd = toolsDir </> name ++ ".sh" ++ " " ++ argsStr
-
-  $logDebugS DM._LOGTAG $ T.pack $ "systemTask: system cmd. " ++ cmd
-  return $ systemTask cmd callback
-
-  where
-    -- |
-    --
-    systemTask :: String -> DM.SystemCommandCallback () -> IOTask ()
-    systemTask cmd callback = do
-      hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.systemTask run. " ++ cmd
-
-      (code, out, err) <- readCreateProcessWithExitCode (shell cmd) ""
-
-      callback code out err
-
-      hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.systemTask end."
-
-
--- |
---
 genPtyConnectTask :: DM.PtyConnectCommandData -> AppContext (IOTask ())
 genPtyConnectTask dat = do
   let name     = dat^.DM.namePtyConnectCommandData
@@ -176,17 +139,17 @@ genPtyConnectTask dat = do
       tout     = 30 * 1000 * 1000
 
   prompts <- view DM.promptsDomainData <$> lift ask
-  pmsTMVar  <- view pmsAppData <$> ask
+  ptyTMVar  <- view ptyAppData <$> ask
   procTMVar <- view processHandleAppData <$> ask
   lockTMVar <- view lockAppData <$> ask
 
   (cmdTmp, argsArrayTmp)  <- getCommandArgs name argsBS
-  cmd <- validateCommand cmdTmp
-  argsArray <- validateCommandArgs argsArrayTmp
+  cmd <- liftIOE $ DM.validateCommand cmdTmp
+  argsArray <- liftIOE $ DM.validateArgs argsArrayTmp
 
   $logDebugS DM._LOGTAG $ T.pack $ "ptyConnectTask: cmd. " ++ cmd ++ " " ++ show argsArray
 
-  return $ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd argsArray prompts tout callback
+  return $ ptyConnectTask ptyTMVar procTMVar lockTMVar cmd argsArray prompts tout callback
 
   where
     -- |
@@ -248,32 +211,23 @@ ptyConnectTask :: STM.TMVar (Maybe Pty)
                -> [String]
                -> [String]
                -> Int
-               -> DM.PtyConnectCommandCallback ()
+               -> DM.ToolsCallCommandCallback ()
                -> IOTask ()
-ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts tout callback = flip E.catchAny errHdl $ do
+ptyConnectTask ptyTMVar procTMVar lockTMVar cmd args prompts tout callback = do
   hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyConnectTask run. " ++ cmd ++ " " ++ show args
 
-  let env = Nothing
-      -- env = Just [("TERM", "dumb")]
-      dim = (80, 24)
-
-  (pms, procHdl) <- spawnWithPty env True cmd args dim
-
-  STM.atomically (STM.takeTMVar pmsTMVar) >>= \case
-    Just _ -> do
-      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyConnectTask: pms is already connected."
+  STM.atomically (STM.takeTMVar ptyTMVar) >>= \case
+    Just p -> do
+      STM.atomically $ STM.putTMVar ptyTMVar $ Just p
+      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyConnectTask: pty is already connected."
       callback (ExitFailure 1) "" "PTY is already connected."
-    Nothing -> STM.atomically $ STM.putTMVar pmsTMVar (Just pms)
+    Nothing -> E.catchAny runPty errHdl 
 
-  STM.atomically (STM.takeTMVar procTMVar) >>= \case
-    Just _ -> do
-      hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyConnectTask: process is already connected."
-      callback (ExitFailure 1) "" "Process is already connected."
-    Nothing -> STM.atomically $ STM.putTMVar procTMVar (Just procHdl)
-
-  race (expect lockTMVar pms prompts) (CC.threadDelay tout) >>= \case
-    Left res  -> callback ExitSuccess (maybe "Nothing" id res) ""
-    Right _ -> E.throwString "timeout occurred."
+  STM.atomically (STM.readTMVar ptyTMVar) >>= \case            
+    Just p -> race (DM.expect lockTMVar (readPty p) prompts) (CC.threadDelay tout) >>= \case
+      Left res  -> callback ExitSuccess (maybe "Nothing" id res) ""
+      Right _ -> callback (ExitFailure 1) "" "timeout occurred."
+    Nothing -> callback (ExitFailure 1) "" "unexpected. pty not found."
 
   hPutStrLn stderr "[INFO] PMS.Infrastructure.DS.Core.work.ptyConnectTask end."
 
@@ -281,8 +235,21 @@ ptyConnectTask pmsTMVar procTMVar lockTMVar cmd args prompts tout callback = fli
     -- |
     --
     errHdl :: E.SomeException -> IO ()
-    errHdl e = callback (ExitFailure 1) "" (show e)
+    errHdl e = do
+      STM.atomically $ STM.putTMVar ptyTMVar Nothing
+      callback (ExitFailure 1) "" (show e)
 
+    -- |
+    --
+    runPty :: IO ()
+    runPty = do
+      let env = Nothing
+       -- env = Just [("TERM", "dumb")]
+          dim = (80, 24)
+      (pty, procHdl) <- spawnWithPty env True cmd args dim
+      STM.atomically $ STM.putTMVar ptyTMVar (Just pty)
+      _ <- STM.atomically $ STM.swapTMVar procTMVar (Just procHdl)
+      return ()
 
 -- |
 --
@@ -290,32 +257,32 @@ genPtyTerminateTask :: DM.PtyTerminateCommandData -> AppContext (IOTask ())
 genPtyTerminateTask dat = do
   let callback = dat^.DM.callbackPtyTerminateCommandData
   
-  pmsTMVar  <- view pmsAppData <$> ask
+  ptyTMVar  <- view ptyAppData <$> ask
   procTMVar <- view processHandleAppData <$> ask
 
   $logDebugS DM._LOGTAG $ T.pack $ "ptyTerminateTask called. "
-  return $ ptyTerminateTask pmsTMVar procTMVar callback
+  return $ ptyTerminateTask ptyTMVar procTMVar callback
 
 -- |
 --
 ptyTerminateTask :: STM.TMVar (Maybe Pty)
                  -> STM.TMVar (Maybe ProcessHandle)
-                 -> DM.PtyTerminateCommandCallback ()
+                 -> DM.ToolsCallCommandCallback ()
                  -> IOTask ()
-ptyTerminateTask pmsTMVar procTMVar callback = flip E.catchAny errHdl $ do
+ptyTerminateTask ptyTMVar procTMVar callback = flip E.catchAny errHdl $ do
   hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyTerminateTask run. "
 
-  STM.atomically (STM.swapTMVar pmsTMVar Nothing) >>= \case
+  STM.atomically (STM.swapTMVar ptyTMVar Nothing) >>= \case
     Nothing -> do
       hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyTerminateTask: pty is not connected."
       callback (ExitFailure 1) "" "PTY is not connected."
-    Just pms -> STM.atomically (STM.swapTMVar procTMVar Nothing) >>= \case
+    Just pty -> STM.atomically (STM.swapTMVar procTMVar Nothing) >>= \case
       Nothing -> do
         hPutStrLn stderr "[ERROR] PMS.Infrastructure.DS.Core.work.ptyTerminateTask: invalid pty status."
         callback (ExitFailure 1) "" "invalid pty status."
       Just phandle -> do
         hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyTerminateTask closePty : "
-        closePty pms
+        closePty pty
         exitCode <- waitForProcess phandle
         callback exitCode "pty teminated." ""
 
@@ -337,14 +304,14 @@ genPtyMessageTask dat = do
       argsBS = DM.unRawJsonByteString $ dat^.DM.argumentsPtyMessageCommandData
       tout = 30 * 1000 * 1000 
   prompts <- view DM.promptsDomainData <$> lift ask
-  pmsTMVar  <- view pmsAppData <$> ask
+  ptyTMVar  <- view ptyAppData <$> ask
   procTMVar <- view processHandleAppData <$> ask
   lockTMVar <- view lockAppData <$> ask
   argsDat <- liftEither $ eitherDecode $ argsBS
   let args = argsDat^.argumentsStringToolParams
 
   $logDebugS DM._LOGTAG $ T.pack $ "ptyMessageTask: args. " ++ args
-  return $ ptyMessageTask pmsTMVar procTMVar lockTMVar args prompts tout callback
+  return $ ptyMessageTask ptyTMVar procTMVar lockTMVar args prompts tout callback
 
 -- |
 --
@@ -354,7 +321,7 @@ ptyMessageTask :: STM.TMVar (Maybe Pty)
                -> String  -- arguments line
                -> [String]  -- prompt list
                -> Int       -- timeout microsec
-               -> DM.PtyMessageCommandCallback ()
+               -> DM.ToolsCallCommandCallback ()
                -> IOTask ()
 ptyMessageTask ptyTMVar _ lockTMVar args prompts tout callback = flip E.catchAny errHdl $ do
   hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask run. " ++ args
@@ -375,92 +342,17 @@ ptyMessageTask ptyTMVar _ lockTMVar args prompts tout callback = flip E.catchAny
 
     go :: Pty -> IO ()
     go pty = do
-      msg <- validateMessage args
+      msg <- DM.validateMessage args
       let cmd = TE.encodeUtf8 $ T.pack $ msg ++ _LF
       hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask writePty : " ++ BS.unpack cmd
       writePty pty cmd
       
-      race (expect lockTMVar pty prompts) (CC.threadDelay tout) >>= \case
+      race (DM.expect lockTMVar (readPty pty) prompts) (CC.threadDelay tout) >>= \case
         Left res  -> callback ExitSuccess (maybe "Nothing" id res) ""
         Right _ -> E.throwString "timeout occurred."
 
 
-
 -- |
---
-expect :: STM.TMVar () -> Pty -> [String] -> IO (Maybe String)
-expect lock pty prompts = STM.atomically (STM.tryTakeTMVar lock) >>= \case
-  Nothing -> do
-    hPutStrLn stderr "[INFO] expect running. skip."
-    return Nothing
-  Just () -> flip E.catchAny exception $ flip E.finally finalize $ do
-    hPutStrLn stderr $ "[INFO] expect: " ++ show prompts
-    output <- readUntilPrompt pty prompts
-    let result = T.unpack (TE.decodeUtf8 output)
-    return (Just result)
-
-  where
-    -- |
-    --
-    exception :: E.SomeException -> IO (Maybe String)
-    exception e = do
-      hPutStrLn stderr $ "[ERROR] expect exception: " ++ show e
-      return . Just . show $ e
-
-    -- |
-    --
-    finalize :: IO ()
-    finalize = STM.atomically $ STM.putTMVar lock ()
-
--- |
---
-readUntilPrompt :: Pty -> [String] -> IO BS.ByteString
-readUntilPrompt pms prompts = go BS.empty
-  where
-    promptBsList = map BS.pack prompts
-
-    foundPrompt acc = any (`BS.isInfixOf` acc) promptBsList
-
-    go acc = do
-      chunk <- readPty pms
-      when ("\ESC[6n" `BS.isInfixOf` chunk) $ do
-        E.throwString "Unsupported: Detected cursor position report request (ESC[6n)."
-
-      let txt = ANSI.stripAnsiEscapeCodes $ TE.decodeUtf8With TEE.lenientDecode chunk
-      hPutStrLn stderr $ "[INFO] chunk:\n" ++ T.unpack txt
-
-      let acc' = BS.append acc chunk
-      if foundPrompt acc'
-        then return acc'
-        else go acc'
-
-{-
-readUntilPrompt :: Pty -> [String] -> IO BS.ByteString
-readUntilPrompt pms prompts = go BS.empty T.empty
-  where
-    promptTextList = map T.pack prompts
-
-    foundPrompt :: T.Text -> Bool
-    foundPrompt txt = any (`T.isInfixOf` txt) promptTextList
-
-    go accBs accTxt = do
-      chunk <- readPty pms
-      let txt = ANSI.stripAnsiEscapeCodes $ TE.decodeUtf8With TEE.lenientDecode chunk
-      hPutStrLn stderr $ "[INFO] chunk:\n" ++ T.unpack txt
-
-      when ("\ESC[6n" `BS.isInfixOf` chunk) $ do
-        hPutStrLn stderr "[INFO] Detected cursor position report request, replying with ESC[1;1R"
-        writePty pms (DBS.pack ([0x1B :: Word8, 0x5B :: Word8] ++ map (fromIntegral . ord) "0;0R"))
-
-      let accBs' = BS.append accBs chunk
-          accTxt' = T.append accTxt txt
-      if foundPrompt accTxt'
-        then return accBs'
-        else go accBs' accTxt'
--}
-
--- |
--- 
 --
 getGhciFlagsFromPath :: FilePath -> Maybe FilePath -> IO [String]
 getGhciFlagsFromPath prjDir startup = do

@@ -17,7 +17,7 @@ import qualified PMS.Domain.Model.DM.TH as DM
 
 
 data AppData = AppData {
-               _pmsAppData :: STM.TMVar (Maybe Pty)
+               _ptyAppData :: STM.TMVar (Maybe Pty)
              , _processHandleAppData :: STM.TMVar (Maybe ProcessHandle) 
              , _lockAppData :: STM.TMVar ()
              }
@@ -26,11 +26,11 @@ makeLenses ''AppData
 
 defaultAppData :: IO AppData
 defaultAppData = do
-  pmsVar  <- STM.newTMVarIO Nothing
+  ptyVar  <- STM.newTMVarIO Nothing
   procVar <- STM.newTMVarIO Nothing
   lock    <- STM.newTMVarIO ()
   return AppData {
-           _pmsAppData = pmsVar
+           _ptyAppData = ptyVar
          , _processHandleAppData = procVar
          , _lockAppData = lock
          }
