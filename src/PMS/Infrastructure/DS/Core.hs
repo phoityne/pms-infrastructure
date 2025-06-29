@@ -143,33 +143,38 @@ genPtyConnectTask dat = do
   procTMVar <- view processHandleAppData <$> ask
   lockTMVar <- view lockAppData <$> ask
 
-  (cmdTmp, argsArrayTmp)  <- getCommandArgs name argsBS
+  (cmdTmp, argsArrayTmp,addPrompts)  <- getCommandArgs name argsBS
   cmd <- liftIOE $ DM.validateCommand cmdTmp
   argsArray <- liftIOE $ DM.validateArgs argsArrayTmp
 
   $logDebugS DM._LOGTAG $ T.pack $ "ptyConnectTask: cmd. " ++ cmd ++ " " ++ show argsArray
 
-  return $ ptyConnectTask ptyTMVar procTMVar lockTMVar cmd argsArray prompts tout callback
+  return $ ptyConnectTask ptyTMVar procTMVar lockTMVar cmd argsArray (prompts++addPrompts) tout callback
 
   where
     -- |
     --
-    getCommandArgs :: String -> BL.ByteString -> AppContext (String, [String])
+    getCommandArgs :: String -> BL.ByteString -> AppContext (String, [String], [String])
     getCommandArgs "pty-connect" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
       let argsArray = maybe [] id (argsDat^.argumentsPtyConnectToolParams)
           cmd = argsDat^.commandPtyConnectToolParams
-      return (cmd, argsArray)
+      return (cmd, argsArray, [])
 
     getCommandArgs "pty-bash" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
       let argsArray = argsDat^.argumentsStringArrayToolParams
-      return ("bash", argsArray)
+      return ("bash", argsArray, [])
 
     getCommandArgs "pty-ssh" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
       let argsArray = argsDat^.argumentsStringArrayToolParams
-      return ("ssh", argsArray)
+      return ("ssh", argsArray, ["password:"])
+
+    getCommandArgs "pty-telnet" argsBS = do
+      argsDat <- liftEither $ eitherDecode $ argsBS
+      let argsArray = argsDat^.argumentsStringArrayToolParams
+      return ("telnet", argsArray, ["login:", "Password:"])
 
     getCommandArgs "pty-cabal" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
@@ -178,7 +183,7 @@ genPtyConnectTask dat = do
 
       liftIOE $ D.setCurrentDirectory prjDir
       
-      return ("cabal", "repl":argsArray)
+      return ("cabal", "repl":argsArray, [])
 
     getCommandArgs "pty-stack" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
@@ -187,7 +192,7 @@ genPtyConnectTask dat = do
 
       liftIOE $ D.setCurrentDirectory prjDir
       
-      return ("stack", "repl": argsArray)
+      return ("stack", "repl": argsArray, [])
 
     getCommandArgs "pty-ghci" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
@@ -198,7 +203,7 @@ genPtyConnectTask dat = do
       liftIOE $ D.setCurrentDirectory prjDir
       argsArray <- liftIOE $ getGhciFlagsFromPath prjDir startup
       
-      return ("ghc", argsArray ++ addArgs)
+      return ("ghc", argsArray ++ addArgs, [])
 
     getCommandArgs x _ = throwError $ "getCommand: unsupported command. " ++ x
 
