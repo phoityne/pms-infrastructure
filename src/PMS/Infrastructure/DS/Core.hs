@@ -169,7 +169,7 @@ genPtyConnectTask dat = do
     getCommandArgs "pty-ssh" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
       let argsArray = argsDat^.argumentsStringArrayToolParams
-      return ("ssh", argsArray, ["password:"])
+      return ("ssh", argsArray, [")?", "password:"])
 
     getCommandArgs "pty-telnet" argsBS = do
       argsDat <- liftEither $ eitherDecode $ argsBS
