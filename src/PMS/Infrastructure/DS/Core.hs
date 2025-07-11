@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module PMS.Infrastructure.DS.Core where
 
@@ -248,10 +249,10 @@ ptyConnectTask ptyTMVar procTMVar lockTMVar cmd args prompts tout callback = do
     --
     runPty :: IO ()
     runPty = do
-      let env = Nothing
+      let envList = Nothing
        -- env = Just [("TERM", "dumb")]
           dim = (80, 24)
-      (pty, procHdl) <- spawnWithPty env True cmd args dim
+      (pty, procHdl) <- spawnWithPty envList True cmd args dim
       STM.atomically $ STM.putTMVar ptyTMVar (Just pty)
       _ <- STM.atomically $ STM.swapTMVar procTMVar (Just procHdl)
       return ()
@@ -361,14 +362,14 @@ ptyMessageTask ptyTMVar _ lockTMVar args prompts tout callback = flip E.catchAny
 --
 getGhciFlagsFromPath :: FilePath -> Maybe FilePath -> IO [String]
 getGhciFlagsFromPath prjDir startup = do
-  let cwd = prjDir
+  let prjcwd = prjDir
   startupFile <- case startup of
     Just path -> do
       exists <- D.doesFileExist path
-      return $ if exists then path else cwd </> "Dummy.hs"
-    Nothing -> return $ cwd </> "Dummy.hs"
+      return $ if exists then path else prjcwd </> "Dummy.hs"
+    Nothing -> return $ prjcwd </> "Dummy.hs"
 
-  hPutStrLn stderr $ "[INFO] getGhciFlagsFromPath: cwd: " ++ cwd
+  hPutStrLn stderr $ "[INFO] getGhciFlagsFromPath: prjcwd: " ++ prjcwd
   hPutStrLn stderr $ "[INFO] getGhciFlagsFromPath: startupFile: " ++ startupFile
 
   explicitCradle <- HIE.findCradle startupFile
@@ -385,7 +386,7 @@ getGhciFlagsFromPath prjDir startup = do
       hPutStrLn stderr $ "[WARN] Failed to get runtime GHC libdir: " ++ show e
       return ""
 
-  compOptsResult <- D.withCurrentDirectory cwd $
+  compOptsResult <- D.withCurrentDirectory prjcwd $
     HIE.getCompilerOptions startupFile HIE.LoadFile cradle
 
   flags <- case compOptsResult of
