@@ -35,7 +35,6 @@ import qualified PMS.Domain.Model.DS.Utility as DM
 import qualified PMS.Domain.Model.DM.Type as DM
 import qualified PMS.Domain.Model.DM.Constant as DM
 
-import PMS.Infrastructure.DM.Constant
 import PMS.Infrastructure.DM.Type
 import PMS.Infrastructure.DS.Utility
 
@@ -349,7 +348,7 @@ ptyMessageTask ptyTMVar _ lockTMVar args prompts tout callback = flip E.catchAny
     go :: Pty -> IO ()
     go pty = do
       msg <- DM.validateMessage args
-      let cmd = TE.encodeUtf8 $ T.pack $ msg ++ _LF
+      let cmd = TE.encodeUtf8 $ T.pack $ msg ++ DM._LF
       hPutStrLn stderr $ "[INFO] PMS.Infrastructure.DS.Core.work.ptyMessageTask writePty : " ++ BS.unpack cmd
       writePty pty cmd
       
