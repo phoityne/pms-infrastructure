@@ -1,5 +1,9 @@
 # Revision history for pms-infrastructure
 
+## 0.0.6.0 -- 2025-07-27
+
+* Fixed resources templates.
+
 ## 0.0.5.0 -- 2025-07-13
 
 * Added serial tool.
