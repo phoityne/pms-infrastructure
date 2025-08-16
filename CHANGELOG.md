@@ -1,5 +1,9 @@
 # Revision history for pms-infrastructure
 
+## 0.0.7.0 -- 2025-08-17
+
+* Fixed proc-message.
+
 ## 0.0.6.0 -- 2025-07-27
 
 * Fixed resources templates.
